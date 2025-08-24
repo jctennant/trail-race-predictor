@@ -1,54 +1,53 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
 
-class RaceInput(BaseModel):
-    distance_miles: float         # target race distance in miles
-    elevation_gain_ft: float      # elevation gain in feet
-    race_pr_minutes: float        # PR time (minutes)
-    race_pr_type: str             # one of "5k", "10k", "half", "marathon"
+# --- Enable CORS for Lovable frontend ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://trail-genie.lovable.app"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Conversion constants
+class RaceInput(BaseModel):
+    distance_miles: float        # target race distance in miles
+    elevation_gain_ft: float     # total climb in feet
+    race_pr_minutes: float       # PR time (in minutes)
+    race_pr_distance_miles: float  # distance of that PR in miles
+
 MILES_TO_KM = 1.60934
 FEET_TO_METERS = 0.3048
 
-# Standard race distances in miles
-STANDARD_DISTANCES = {
-    "5k": 3.10686,
-    "10k": 6.21371,
-    "half": 13.1094,
-    "marathon": 26.2188
-}
-
 @app.post("/predict")
 def predict_time(data: RaceInput):
-    # --- Step 1: validate race type ---
-    if data.race_pr_type not in STANDARD_DISTANCES:
-        return {"error": "race_pr_type must be one of '5k', '10k', 'half', 'marathon'"}
-    
-    # --- Step 2: calculate flat speed from PR ---
-    pr_distance = STANDARD_DISTANCES[data.race_pr_type]
+    # --- Step 1: Adjust PR to target distance using Riegel’s formula ---
     pr_time_hours = data.race_pr_minutes / 60.0
-    flat_speed_mph = pr_distance / pr_time_hours  # miles per hour
-    
-    # --- Step 3: base time on flat terrain ---
-    base_time_hours = data.distance_miles / flat_speed_mph
-    
-    # --- Step 4: elevation penalty ---
+    fatigue_exponent = 1.06 if data.distance_miles <= 26.2 else 1.08  # ultras slow more
+    predicted_flat_time_hours = pr_time_hours * (data.distance_miles / data.race_pr_distance_miles) ** fatigue_exponent
+
+    # --- Step 2: Base pace ---
+    base_time_hours = predicted_flat_time_hours
+
+    # --- Step 3: Uphill penalty ---
     elevation_gain_m = data.elevation_gain_ft * FEET_TO_METERS
-    climb_penalty = (elevation_gain_m / 100.0) * 0.5 / 60.0  # hours
-    
-    # --- Step 5: total predicted time ---
+    climb_penalty = (elevation_gain_m / 100.0) * 0.5 / 60.0  # extra hours
+
+    # --- Step 4: Final total time ---
     total_time_hours = base_time_hours + climb_penalty
     total_time_minutes = total_time_hours * 60
-    
+
     return {
         "predicted_time_hours": round(total_time_hours, 2),
         "predicted_time_minutes": round(total_time_minutes, 1),
         "details": {
-            "flat_speed_mph": round(flat_speed_mph, 2),
-            "base_time_hours": round(base_time_hours, 2),
-            "climb_penalty_hours": round(climb_penalty, 2)
+            "base_time_hours_flat": round(base_time_hours, 2),
+            "climb_penalty_hours": round(climb_penalty, 2),
+            "fatigue_exponent_used": fatigue_exponent,
+            "pr_distance_miles": data.race_pr_distance_miles,
+            "target_distance_miles": data.distance_miles,
         }
     }
