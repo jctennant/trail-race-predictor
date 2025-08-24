@@ -50,7 +50,7 @@ def predict_time_tobler(distance_miles, elevation_gain_ft):
     # --- Scale for running (roughly 2.5x faster than hiking) ---
     running_speed_kmh = hiking_speed_kmh * 2.5
 
-    # --- Tobler time ---
+    # --- Tobler time (with slope) ---
     tobler_time_hours = distance_km / running_speed_kmh
     tobler_time_minutes = tobler_time_hours * 60
 
@@ -62,20 +62,24 @@ def predict_time_tobler(distance_miles, elevation_gain_ft):
 
     adjusted_time_minutes = tobler_time_minutes * fatigue_factor
 
-    return adjusted_time_minutes, tobler_time_minutes, fatigue_factor
+    # --- Flat baseline (for GAP) ---
+    flat_speed_kmh = 6 * math.exp(-3.5 * abs(0.0 + 0.05)) * 2.5
+    flat_time_minutes = (distance_km / flat_speed_kmh) * 60 * fatigue_factor
+
+    return adjusted_time_minutes, tobler_time_minutes, flat_time_minutes, fatigue_factor
 
 
 @app.post("/predict")
 def predict_time(data: RaceInput):
     # --- Base Tobler + fatigue prediction ---
-    adjusted_time_minutes, tobler_time_minutes, fatigue_factor = predict_time_tobler(
+    adjusted_time_minutes, tobler_time_minutes, flat_time_minutes, fatigue_factor = predict_time_tobler(
         data.distance_miles,
         data.elevation_gain_ft
     )
 
     # --- Paces ---
     avg_pace_min_per_mile = adjusted_time_minutes / data.distance_miles
-    grade_adjusted_pace_min_per_mile = tobler_time_minutes / data.distance_miles
+    grade_adjusted_pace_min_per_mile = flat_time_minutes / data.distance_miles
 
     return {
         "predicted_time_minutes": round(adjusted_time_minutes, 1),
@@ -84,7 +88,11 @@ def predict_time(data: RaceInput):
         "grade_adjusted_pace_min_per_mile": round(grade_adjusted_pace_min_per_mile, 2),
         "details": {
             "tobler_time_minutes": round(tobler_time_minutes, 1),
+            "flat_time_minutes": round(flat_time_minutes, 1),
             "fatigue_factor": round(fatigue_factor, 3),
             "slope": round(data.elevation_gain_ft * FEET_TO_METERS / (data.distance_miles * MILES_TO_KM * 1000.0), 4),
         }
     }
+
+
+
